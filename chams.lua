@@ -15,7 +15,7 @@ local TWEEN_DURATION = 0.15
 local ENEMY_COLOR = Color3.fromRGB(255, 0, 0)      -- Красный для обычных врагов
 local USER_COLOR = Color3.fromRGB(0, 255, 0)       -- Зеленый для юзеров этого скрипта
 
--- Настройка дистанции ближнего боя
+-- Настройка дистанции ближнего боя для КРАСНЫХ врагов
 local CLOSE_RADIUS = 40 
 
 -- Таблица для отслеживания текущих анимаций
@@ -26,7 +26,7 @@ local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 raycastParams.IgnoreWater = true
 
--- СЕТЕВАЯ СИНХРОНИЗАЦИЯ ЮЗЕРОВ (Создаем невидимую папку для тегов)
+-- СЕТЕВАЯ СИНХРОНИЗАЦИЯ ЮЗЕРОВ
 local networkFolder = ReplicatedStorage:FindFirstChild("ScriptUsersNetwork")
 if not networkFolder then
     networkFolder = Instance.new("Folder")
@@ -42,7 +42,7 @@ if not myTag then
     myTag.Parent = networkFolder
 end
 
--- Функция проверки: использует ли другой игрок этот скрипт прямо сейчас
+-- Функция проверки: использует ли другой игрок этот скрипт
 local function isScriptUser(player)
     return networkFolder:FindFirstChild(player.Name) ~= nil
 end
@@ -64,7 +64,6 @@ local function createHighlight(player, color)
             highlight.Enabled = true 
             highlight.Parent = char
         else
-            -- Если чамсы уже есть, но цвет должен измениться (например, челик только что заинжектил скрипт)
             if highlight.FillColor ~= color then
                 highlight.FillColor = color
             end
@@ -153,30 +152,31 @@ RunService.RenderStepped:Connect(function()
             
             if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 and player.Character:FindFirstChild("HumanoidRootPart") then
                 
-                -- ОПРЕДЕЛЯЕМ ЦВЕТ: Если юзер скрипта — зеленый (даже если он союзник!). Если просто враг — красный.
-                local finalColor = ENEMY_COLOR
-                local shouldShow = isEnemy
-
-                if isScriptUser(player) then
-                    finalColor = USER_COLOR
-                    shouldShow = true -- Юзеров скрипта показываем ВСЕГДА, даже если они за твою команду
-                end
+                local isUser = isScriptUser(player)
+                local finalColor = isUser and USER_COLOR or ENEMY_COLOR
+                local shouldShow = isEnemy or isUser
 
                 if shouldShow then
                     createHighlight(player, finalColor)
                     
                     local distance = myHrp and (player.Character.HumanoidRootPart.Position - myHrp.Position).Magnitude or 99999
-                    
                     local visible = false
-                    if distance <= CLOSE_RADIUS then
-                        visible = true 
+                    
+                    -- НОВАЯ РАЗДЕЛЬНАЯ ЛОГИКА ОТОБРАЖЕНИЯ:
+                    if isUser then
+                        -- Если это юзер скрипта — он виден ВСЕГДА, везде и сквозь любые стены
+                        visible = true
                     else
-                        visible = isInFOV(player) and not isBehindWall(player) 
+                        -- Если это обычный враг — проверяем дистанцию ближнего боя, FOV и стены
+                        if distance <= CLOSE_RADIUS then
+                            visible = true 
+                        else
+                            visible = isInFOV(player) and not isBehindWall(player) 
+                        end
                     end
                     
                     fadeChams(player, visible)
                 else
-                    -- Если это твой союзник и он НЕ юзер скрипта — убираем чамсы
                     if activeTweens[player] then
                         activeTweens[player].Tween:Cancel()
                         activeTweens[player] = nil
@@ -196,7 +196,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Удаление своего тега из сети при выходе из игры или ресете скрипта
+-- Удаление своего тега из сети при выходе из игры
 Players.PlayerRemoving:Connect(function(player)
     activeTweens[player] = nil
     local userTag = networkFolder:FindFirstChild(player.Name)
