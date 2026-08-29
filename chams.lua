@@ -1,22 +1,18 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 -- Настройки чамсов
+local CHAMS_COLOR = Color3.fromRGB(255, 0, 0)
 local CHAMS_OUTLINE = Color3.fromRGB(255, 255, 255)
 local TARGET_FILL_TRANS = 0.5
 local TARGET_OUTLINE_TRANS = 0
-local TWEEN_DURATION = 0.15 
+local TWEEN_DURATION = 0.15 -- Скорость плавного появления/исчезновения
 
--- ЦВЕТА
-local ENEMY_COLOR = Color3.fromRGB(255, 0, 0)      -- Красный для обычных врагов
-local USER_COLOR = Color3.fromRGB(0, 255, 0)       -- Зеленый для юзеров этого скрипта
-
--- Настройка дистанции ближнего боя для КРАСНЫХ врагов
-local CLOSE_RADIUS = 40 
+-- Настройка дистанции ближнего боя
+local CLOSE_RADIUS = 40 -- Внутри этого радиуса чамсы горят всегда (даже со спины и за стеной)
 
 -- Таблица для отслеживания текущих анимаций
 local activeTweens = {}
@@ -26,48 +22,19 @@ local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 raycastParams.IgnoreWater = true
 
--- СЕТЕВАЯ СИНХРОНИЗАЦИЯ ЮЗЕРОВ
-local networkFolder = ReplicatedStorage:FindFirstChild("ScriptUsersNetwork")
-if not networkFolder then
-    networkFolder = Instance.new("Folder")
-    networkFolder.Name = "ScriptUsersNetwork"
-    networkFolder.Parent = ReplicatedStorage
-end
-
--- Регистрируем себя в сети юзеров
-local myTag = networkFolder:FindFirstChild(LocalPlayer.Name)
-if not myTag then
-    myTag = Instance.new("BoolValue")
-    myTag.Name = LocalPlayer.Name
-    myTag.Parent = networkFolder
-end
-
--- Функция проверки: использует ли другой игрок этот скрипт
-local function isScriptUser(player)
-    return networkFolder:FindFirstChild(player.Name) ~= nil
-end
-
 -- Функция создания подсветки
-local function createHighlight(player, color)
-    local char = player.Character
-    if char then
-        local highlight = char:FindFirstChild("VisibleChams")
-        if not highlight then
-            highlight = Instance.new("Highlight")
-            highlight.Name = "VisibleChams"
-            highlight.FillColor = color
-            highlight.OutlineColor = CHAMS_OUTLINE
-            highlight.FillTransparency = 1 
-            highlight.OutlineTransparency = 1
-            highlight.Adornee = char
-            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            highlight.Enabled = true 
-            highlight.Parent = char
-        else
-            if highlight.FillColor ~= color then
-                highlight.FillColor = color
-            end
-        end
+local function createHighlight(player)
+    if player.Character and not player.Character:FindFirstChild("VisibleChams") then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "VisibleChams"
+        highlight.FillColor = CHAMS_COLOR
+        highlight.OutlineColor = CHAMS_OUTLINE
+        highlight.FillTransparency = 1 -- Изначально скрыт для плавного появления
+        highlight.OutlineTransparency = 1
+        highlight.Adornee = player.Character
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Enabled = true -- Всегда включен, управляем через прозрачность
+        highlight.Parent = player.Character
     end
 end
 
@@ -123,6 +90,7 @@ local function isBehindWall(player)
     local target = player.Character.HumanoidRootPart.Position
     local direction = target - origin
     
+    -- ИСПРАВЛЕНИЕ: Игнорируем персонажей абсолютно всех игроков, чтобы луч не спотыкался о самого врага
     local ignoreList = {Camera, LocalPlayer.Character}
     for _, p in ipairs(Players:GetPlayers()) do
         if p.Character then table.insert(ignoreList, p.Character) end
@@ -150,41 +118,22 @@ RunService.RenderStepped:Connect(function()
         if player ~= LocalPlayer then
             local isEnemy = (not LocalPlayer.Team or player.Team ~= LocalPlayer.Team)
             
-            if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 and player.Character:FindFirstChild("HumanoidRootPart") then
+            if isEnemy and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 and player.Character:FindFirstChild("HumanoidRootPart") then
+                createHighlight(player)
                 
-                local isUser = isScriptUser(player)
-                local finalColor = isUser and USER_COLOR or ENEMY_COLOR
-                local shouldShow = isEnemy or isUser
-
-                if shouldShow then
-                    createHighlight(player, finalColor)
-                    
-                    local distance = myHrp and (player.Character.HumanoidRootPart.Position - myHrp.Position).Magnitude or 99999
-                    local visible = false
-                    
-                    -- НОВАЯ РАЗДЕЛЬНАЯ ЛОГИКА ОТОБРАЖЕНИЯ:
-                    if isUser then
-                        -- Если это юзер скрипта — он виден ВСЕГДА, везде и сквозь любые стены
-                        visible = true
-                    else
-                        -- Если это обычный враг — проверяем дистанцию ближнего боя, FOV и стены
-                        if distance <= CLOSE_RADIUS then
-                            visible = true 
-                        else
-                            visible = isInFOV(player) and not isBehindWall(player) 
-                        end
-                    end
-                    
-                    fadeChams(player, visible)
+                -- Вычисляем дистанцию
+                local distance = myHrp and (player.Character.HumanoidRootPart.Position - myHrp.Position).Magnitude or 99999
+                
+                local visible = false
+                if distance <= CLOSE_RADIUS then
+                    visible = true -- Если близко, то всегда видно
                 else
-                    if activeTweens[player] then
-                        activeTweens[player].Tween:Cancel()
-                        activeTweens[player] = nil
-                    end
-                    local highlight = player.Character and player.Character:FindFirstChild("VisibleChams")
-                    if highlight then highlight:Destroy() end
+                    visible = isInFOV(player) and not isBehindWall(player) -- Если далеко, проверяем FOV и стены
                 end
+                
+                fadeChams(player, visible)
             else
+                -- Очистка анимаций и удаление чамсов у мертвых/союзников
                 if activeTweens[player] then
                     activeTweens[player].Tween:Cancel()
                     activeTweens[player] = nil
@@ -196,9 +145,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Удаление своего тега из сети при выходе из игры
+-- Очистка кэша при выходе игрока
 Players.PlayerRemoving:Connect(function(player)
     activeTweens[player] = nil
-    local userTag = networkFolder:FindFirstChild(player.Name)
-    if userTag then userTag:Destroy() end
 end)
